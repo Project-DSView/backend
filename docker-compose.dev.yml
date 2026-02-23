@@ -1,0 +1,317 @@
+name: dsview
+services:
+  # Traefik Load Balancer & Reverse Proxy
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"      # HTTP
+      - "443:443"    # HTTPS
+      - "8080:8080"  # Traefik Dashboard
+    volumes:
+      - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./docker/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/logs:/var/log/traefik
+    networks:
+      - traefik-network
+      - dsview-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI Service
+  fastapi:
+    build:
+      context: ./fastapi
+      dockerfile: dockerfile
+    container_name: fastapi-backend
+    env_file:
+      - ./fastapi/.env
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ./fastapi/logs:/app/logs
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dsview-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.fastapi.rule=Host(`fastapi.lvh.me`)"
+      - "traefik.http.services.fastapi.loadbalancer.server.port=8000"
+      - "traefik.http.routers.fastapi.entrypoints=websecure"
+      - "traefik.http.routers.fastapi.tls=true"
+
+  # Docker-in-Docker for code execution
+  docker-dind:
+    image: docker:dind
+    container_name: docker-dind
+    privileged: true
+    volumes:
+      - docker-data:/var/lib/docker
+    networks:
+      - dsview-network
+    restart: unless-stopped
+    command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--insecure-registry=0.0.0.0/0"]
+
+  # Go Service
+  go-app:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    container_name: go-backend
+    env_file:
+      - ./go/.env.development
+    volumes:
+      - ./go/logs:/app/logs
+      - ./go/migrations:/app/migrations:ro
+      - ./docker/migrations:/app/docker/migrations:ro
+    environment:
+      - DOCKER_HOST=tcp://docker-dind:2375
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=db_password
+      - DB_NAME=dsview_db
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_BASE_URL=http://ollama:11434
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      docker-dind:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - dsview-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.go.rule=Host(`go.lvh.me`)"
+      - "traefik.http.services.go.loadbalancer.server.port=8080"
+      - "traefik.http.routers.go.entrypoints=websecure"
+      - "traefik.http.routers.go.tls=true"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Running database migrations..."
+        if [ -f /root/migrate ]; then
+          /root/migrate -db-url="host=postgres port=5432 user=postgres password=db_password dbname=dsview_db sslmode=disable" -migrations-dir=/app/migrations -up || echo "Migration failed or already applied"
+        fi
+        echo "Starting application..."
+        exec /root/main
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    environment:
+      POSTGRES_DB: dsview_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: db_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - dsview-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dsview_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+
+  # MinIO Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    networks:
+      - dsview-network
+
+  # RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+    networks:
+      - dsview-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin-backend
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@dsview.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - dsview-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Prometheus Metrics Network
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - dsview-network
+    restart: unless-stopped
+    depends_on:
+      - blackbox-exporter
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.24.0
+    container_name: blackbox-exporter
+    ports:
+      - "9115:9115"
+    networks:
+      - dsview-network
+    restart: unless-stopped
+
+  # Loki + Grafana Stack
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - dsview-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
+    volumes:
+      - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./traefik/logs:/var/log/traefik:ro
+      - ./fastapi/logs:/var/log/fastapi:ro
+      - ./go/logs:/var/log/go:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - dsview-network
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - dsview-network
+    restart: unless-stopped
+    depends_on:
+      - loki
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Ollama Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - dsview-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
+  rabbitmq_data:
+  pgadmin_data:
+  docker-data:
+  loki-data:
+  grafana-data:
+  prometheus_data:
+  ollama_data:
+
+networks:
+  traefik-network:
+    driver: bridge
+  dsview-network:
+    name: dsview-network
+    driver: bridge

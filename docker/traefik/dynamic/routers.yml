@@ -1,0 +1,85 @@
+# Traefik Dynamic Router Configuration
+# Host-based routing with TLS (matching original Docker label config)
+
+http:
+  routers:
+    # FastAPI Service Router (Host-based, HTTPS)
+    fastapi-router:
+      rule: "Host(`fastapi.lvh.me`)"
+      service: "fastapi-service"
+      entryPoints:
+        - "websecure"
+      tls: {}
+
+    # FastAPI Service Router (Host-based, HTTP)
+    fastapi-router-http:
+      rule: "Host(`fastapi.lvh.me`)"
+      service: "fastapi-service"
+      entryPoints:
+        - "web"
+
+    # Go Service Router (Host-based, HTTPS)
+    go-router:
+      rule: "Host(`go.lvh.me`)"
+      service: "go-service"
+      entryPoints:
+        - "websecure"
+      tls: {}
+
+    # Go Service Router (Host-based, HTTP)
+    go-router-http:
+      rule: "Host(`go.lvh.me`)"
+      service: "go-service"
+      entryPoints:
+        - "web"
+
+    # Frontend Router (HTTP)
+    frontend-router:
+      rule: "Host(`dsview.lvh.me`)"
+      service: "frontend-service"
+      entryPoints:
+        - "web"
+
+    # Path-based fallback routers (HTTP) for internal routing
+    fastapi-path-router:
+      rule: "PathPrefix(`/fastapi`)"
+      service: "fastapi-service"
+      middlewares:
+        - fastapi-stripprefix
+      entryPoints:
+        - "web"
+
+    go-path-router:
+      rule: "PathPrefix(`/go`)"
+      service: "go-service"
+      middlewares:
+        - go-stripprefix
+      entryPoints:
+        - "web"
+
+  services:
+    # Frontend Service
+    frontend-service:
+      loadBalancer:
+        servers:
+          - url: "http://dsview-frontend:3000"
+
+    # FastAPI Service
+    fastapi-service:
+      loadBalancer:
+        servers:
+          - url: "http://fastapi-backend:8000"
+        healthCheck:
+          path: "/health"
+          interval: "30s"
+          timeout: "5s"
+
+    # Go Service
+    go-service:
+      loadBalancer:
+        servers:
+          - url: "http://go-backend:8080"
+        healthCheck:
+          path: "/health"
+          interval: "30s"
+          timeout: "5s"

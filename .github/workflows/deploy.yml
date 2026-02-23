@@ -1,0 +1,52 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      # 3. Build & Push Docker Images
+      # Using the existing Makefile logic to keep things consistent
+      # We pass the DOCKER_HUB_USERNAME var to override the default if needed
+      - name: Build and Push Images
+        run: |
+          make build DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME }}
+          make push DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME }}
+
+      # 4. Deploy to Server via SSH
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script: |
+            # Go to project directory (Adjust path as needed)
+            cd /home/${{ secrets.SSH_USER }}/Project_KMITL/Website/backend || exit 1
+
+            # Pull latest code
+            git pull origin main
+
+            # Pull new images
+            make pull DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME }}
+
+            # Restart services
+            make prod

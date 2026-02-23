@@ -1,0 +1,40 @@
+services:
+  # FastAPI Service
+  fastapi:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: fastapi-backend-local
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fastapi-network
+
+  # Ollama Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-local
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - fastapi-network
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+
+networks:
+  fastapi-network:
+    driver: bridge

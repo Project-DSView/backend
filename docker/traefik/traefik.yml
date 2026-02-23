@@ -1,0 +1,95 @@
+# Traefik Static Configuration
+# Enhanced logging and monitoring setup
+
+# Global configuration
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# API and dashboard configuration
+api:
+  dashboard: true
+  insecure: true
+  debug: false
+
+# Entry points
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+# Providers
+providers:
+  # Docker provider disabled - Docker Desktop 29.x breaks socket mounting on Windows
+  # docker:
+  #   endpoint: "unix:///var/run/docker.sock"
+  #   exposedByDefault: false
+  #   network: dsview-network
+
+  # File provider - reads routers/services/middleware from dynamic config
+  file:
+    directory: "/etc/traefik/dynamic"
+    watch: true
+
+# Logging configuration
+log:
+  level: INFO
+  format: json
+  filePath: /var/log/traefik/traefik.log
+
+# Access logs configuration
+accessLog:
+  format: json
+  filePath: /var/log/traefik/access.log
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: keep
+      names:
+        User-Agent: keep
+        Authorization: drop
+        Content-Type: keep
+        Content-Length: keep
+        Accept: keep
+        Accept-Encoding: keep
+        Accept-Language: keep
+        Cache-Control: keep
+        Connection: keep
+        Host: keep
+        Referer: keep
+        X-Forwarded-For: keep
+        X-Forwarded-Proto: keep
+        X-Request-ID: keep
+
+# Metrics configuration
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    addRoutersLabels: true
+    buckets:
+      - 0.1
+      - 0.3
+      - 1.2
+      - 5.0
+
+# Tracing configuration (optional - for future use)
+# tracing:
+#   jaeger:
+#     samplingType: const
+#     samplingParam: 1.0
+#     localAgentHostPort: "jaeger:14268"
+
+# Ping configuration
+ping:
+  entryPoint: "traefik"
+
+# Certificate resolvers (for future SSL setup)
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@dsview.com
+      storage: /etc/traefik/acme.json
+      httpChallenge:
+        entryPoint: web
