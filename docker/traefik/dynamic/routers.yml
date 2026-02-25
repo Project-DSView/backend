@@ -3,6 +3,18 @@
 
 http:
   routers:
+    # ============================================================
+    # Traefik Dashboard — Secured with BasicAuth + IP Whitelist
+    # ============================================================
+    dashboard-router:
+      rule: "Host(`traefik.lvh.me`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      service: "api@internal"
+      entryPoints:
+        - "web"
+      middlewares:
+        - "dashboard-auth"
+        - "dashboard-ipwhitelist"
+
     # FastAPI Service Router (Host-based, HTTPS)
     fastapi-router:
       rule: "Host(`fastapi.lvh.me`)"
@@ -56,6 +68,27 @@ http:
         - go-stripprefix
       entryPoints:
         - "web"
+
+  # ============================================================
+  # Middlewares
+  # ============================================================
+  middlewares:
+    # BasicAuth for dashboard
+    # Default: admin / DsV!ew@2026  (change this!)
+    # Generate new hash: htpasswd -nB admin
+    dashboard-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$05$YzQ5NzFmZGQ4OGRiNOIxZuZjNmM0ZGEzYjNmNzJiYTRiZWRiZTJl"
+
+    # IP whitelist — only allow local/private network access
+    dashboard-ipwhitelist:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
 
   services:
     # Frontend Service
