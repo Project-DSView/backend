@@ -9,7 +9,7 @@ services:
     ports:
       - "80:80"      # HTTP
       - "443:443"    # HTTPS
-      - "8080:8080"  # Traefik Dashboard
+      # Dashboard port removed — secured via BasicAuth middleware in dynamic config
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -55,17 +55,30 @@ services:
       - "traefik.http.services.fastapi.loadbalancer.server.port=8000"
       - "traefik.http.routers.fastapi.entrypoints=web"
 
-  # Docker-in-Docker for code execution
+  # Docker-in-Docker for code execution (TLS-secured)
   docker-dind:
     image: docker:dind
     container_name: docker-dind
-    privileged: true
+    privileged: true  # Required for DinD — consider Sysbox for rootless alternative
+    environment:
+      DOCKER_TLS_CERTDIR: /certs  # Auto-generate TLS certs
     volumes:
       - docker-data:/var/lib/docker
+      - docker-certs-ca:/certs/ca    # Share CA cert with clients
+      - docker-certs-client:/certs/client  # Share client certs
     networks:
       - dsview-network
     restart: unless-stopped
-    command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock", "--insecure-registry=0.0.0.0/0"]
+    expose:
+      - "2376"  # TLS-only, not exposed to host
+    command:
+      - "dockerd"
+      - "--host=tcp://0.0.0.0:2376"
+      - "--host=unix:///var/run/docker.sock"
+      - "--tlsverify"
+      - "--tlscacert=/certs/ca/cert.pem"
+      - "--tlscert=/certs/server/cert.pem"
+      - "--tlskey=/certs/server/key.pem"
 
   # Go Service
   go-app:
@@ -76,7 +89,9 @@ services:
     env_file:
       - ./go/.env.production
     environment:
-      - DOCKER_HOST=tcp://docker-dind:2375
+      - DOCKER_HOST=tcp://docker-dind:2376
+      - DOCKER_TLS_VERIFY=1
+      - DOCKER_CERT_PATH=/certs/client
       - DB_HOST=postgres
       - DB_PORT=5432
       - OLLAMA_HOST=http://ollama:11434
@@ -85,6 +100,7 @@ services:
       - ./go/logs:/app/logs
       - ./go/migrations:/app/migrations:ro
       - ./docker/migrations:/app/docker/migrations:ro
+      - docker-certs-client:/certs/client:ro  # TLS certs for DinD
     expose:
       - "8080"
     depends_on:
@@ -195,6 +211,8 @@ volumes:
   minio_data:
   rabbitmq_data:
   docker-data:
+  docker-certs-ca:
+  docker-certs-client:
   ollama_data:
 
 networks:

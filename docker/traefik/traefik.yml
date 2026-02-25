@@ -7,9 +7,10 @@ global:
   sendAnonymousUsage: false
 
 # API and dashboard configuration
+# Dashboard is secured via BasicAuth middleware in dynamic config (routers.yml)
+# insecure: true was removed — dashboard is no longer exposed on :8080 without auth
 api:
   dashboard: true
-  insecure: true
   debug: false
 
 # Entry points
