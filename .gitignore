@@ -4,9 +4,6 @@
 .env.production
 .env.staging
 
-# Docker
-.dockerignore
-
 # Logs
 logs/
 *.log
